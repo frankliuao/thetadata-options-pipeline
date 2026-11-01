@@ -398,6 +398,10 @@ class MockCliTests(unittest.TestCase):
         self.assertEqual(renormalized["open_interest"][0], 500)
         self.assertEqual(renormalized["open_interest_prior_close"][0], 500)
 
+        # Fallback when trade_date is None should parse existing trade_date column without TypeError
+        fallback = normalize_options_df(renormalized, trade_date=None)
+        self.assertEqual(fallback["trade_date"][0], datetime.date(2024, 1, 2))
+
     def test_loader_unions_processed_with_newer_raw_sessions(self) -> None:
         from options_data.loader import OptionsDataLoader
 

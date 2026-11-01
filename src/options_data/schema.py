@@ -129,7 +129,7 @@ def normalize_options_df(
     if trade_date is not None:
         exprs.append(pl.lit(trade_date).cast(pl.Date).alias("trade_date"))
     elif "trade_date" in df.columns:
-        exprs.append(date_expr("trade_date").alias("trade_date"))
+        exprs.append(date_expr("trade_date", df.schema["trade_date"]).alias("trade_date"))
     elif "timestamp" in df.columns:
         exprs.append(pl.col("timestamp").dt.date().alias("trade_date"))
     elif "created" in df.columns:

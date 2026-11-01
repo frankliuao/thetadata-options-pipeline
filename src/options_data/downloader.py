@@ -590,6 +590,7 @@ class ThetaOptionsDownloader:
                 saved_days = 0
                 empty_days = 0
                 total_rows = 0
+                failed_days_in_year: list[tuple[datetime.date, Exception]] = []
 
                 if pending_days:
                     with Progress(
@@ -604,7 +605,6 @@ class ThetaOptionsDownloader:
                         task_id = progress.add_task(
                             f"[green]{symbol} {year}[/green]", total=len(pending_days)
                         )
-                        failed_days_in_year: list[tuple[datetime.date, Exception]] = []
                         with concurrent.futures.ThreadPoolExecutor(
                             max_workers=cfg.max_workers
                         ) as pool:
