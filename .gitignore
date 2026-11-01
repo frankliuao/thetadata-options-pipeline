@@ -1,0 +1,39 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Distribution & Build
+dist/
+build/
+*.egg-info/
+
+# Secrets, Credentials & Local configs
+.env
+.env.*
+!.env.example
+creds.txt
+*.pem
+*.key
+
+# Downloaded market data & archives
+data/
+logs/
+*.parquet
+*.parquet.tmp
+.empty
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
