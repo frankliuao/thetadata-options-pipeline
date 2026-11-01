@@ -26,15 +26,61 @@ class OptionsDataLoader:
         processed_dir = self.data_dir / "processed" / "options_eod" / f"symbol={sym}"
         raw_dir = self.data_dir / "raw" / "options_eod" / f"symbol={sym}"
 
-        if use_consolidated and processed_dir.exists() and list(processed_dir.glob("*.parquet")):
-            return pl.scan_parquet(str(processed_dir / "*.parquet"))
+        processed_files: list[Path] = []
+        if use_consolidated and processed_dir.exists():
+            processed_files = sorted(processed_dir.glob("*.parquet"))
 
-        if raw_dir.exists() and list(raw_dir.glob("year=*/*.parquet")):
-            return pl.scan_parquet(str(raw_dir / "year=*/*.parquet"))
+        raw_files: list[Path] = []
+        if raw_dir.exists():
+            raw_files = sorted(raw_dir.glob("year=*/*.parquet"))
 
-        raise FileNotFoundError(
-            f"No Parquet files found for symbol '{sym}' in {processed_dir} or {raw_dir}."
-        )
+        if not processed_files and not raw_files:
+            raise FileNotFoundError(
+                f"No Parquet files found for symbol '{sym}' in {processed_dir} or {raw_dir}."
+            )
+
+        if not processed_files:
+            return pl.scan_parquet([str(p) for p in raw_files])
+
+        if not raw_files:
+            return pl.scan_parquet([str(p) for p in processed_files])
+
+        # Both processed and raw files exist.
+        # Find raw files not yet covered by consolidated yearly files.
+        consolidated_max_dates: dict[int, datetime.date] = {}
+        for pf in processed_files:
+            try:
+                max_d = (
+                    pl.scan_parquet(str(pf))
+                    .select(pl.col("trade_date").max())
+                    .collect()
+                    .item()
+                )
+                if isinstance(max_d, datetime.date):
+                    consolidated_max_dates[max_d.year] = max_d
+            except Exception:
+                continue
+
+        unconsolidated_raw: list[Path] = []
+        for rf in raw_files:
+            try:
+                date_str = rf.stem.replace(f"{sym}_", "")
+                rf_date = datetime.date.fromisoformat(date_str)
+                rf_year = rf_date.year
+                if rf_year not in consolidated_max_dates:
+                    unconsolidated_raw.append(rf)
+                elif rf_date > consolidated_max_dates[rf_year]:
+                    unconsolidated_raw.append(rf)
+            except Exception:
+                unconsolidated_raw.append(rf)
+
+        sources = [pl.scan_parquet([str(p) for p in processed_files])]
+        if unconsolidated_raw:
+            sources.append(pl.scan_parquet([str(p) for p in unconsolidated_raw]))
+
+        if len(sources) == 1:
+            return sources[0]
+        return pl.concat(sources, how="vertical_relaxed")
 
     def query_chain(
         self,

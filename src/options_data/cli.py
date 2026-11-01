@@ -193,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing daily Parquet files instead of resuming.",
     )
     parser.add_argument(
+        "--sheet-id",
+        type=str,
+        default=None,
+        help="Google Sheet ID for S&P 500 universe export (overrides SP500_UNIVERSE_SHEET_ID env var).",
+    )
+    parser.add_argument(
         "--api-key",
         default=None,
         help="ThetaData API key (overrides THETADATA_API_KEY env var / .env file).",
@@ -212,8 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def resolve_symbols(args: argparse.Namespace) -> list[str]:
     """Resolve the list of symbols from CLI flags or the S&P 500 Universe CSV."""
+    sheet_id = getattr(args, "sheet_id", None)
     if args.refresh_universe:
-        export_universe_sheet_from_gdrive(clean_csv_path=args.universe_file)
+        export_universe_sheet_from_gdrive(
+            sheet_id=sheet_id,
+            clean_csv_path=args.universe_file,
+        )
 
     if args.symbols:
         syms = [s.strip().upper() for s in args.symbols if s.strip()]
@@ -222,6 +232,7 @@ def resolve_symbols(args: argparse.Namespace) -> list[str]:
             csv_path=args.universe_file,
             mode=args.universe,
             include_historical_tickers=args.include_historical_tickers,
+            sheet_id=sheet_id,
         )
 
     if args.offset > 0:

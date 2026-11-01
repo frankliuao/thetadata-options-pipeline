@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Literal
 
 import polars as pl
+from dotenv import load_dotenv
 from rich.console import Console
 
 from options_data.gdrive_sync import get_gdrive_base_cmd
 
+load_dotenv()
 console = Console()
 
 # Optional Google Sheet ID for S&P 500 universe export (configured via SP500_UNIVERSE_SHEET_ID in .env)
@@ -24,20 +26,21 @@ UniverseFilter = Literal["active", "current", "removed_active", "all"]
 
 
 def export_universe_sheet_from_gdrive(
-    sheet_id: str = DEFAULT_UNIVERSE_SHEET_ID,
+    sheet_id: str | None = None,
     raw_csv_path: Path = DEFAULT_RAW_UNIVERSE_CSV,
     clean_csv_path: Path = DEFAULT_UNIVERSE_CSV,
     excluded_csv_path: Path = DEFAULT_EXCLUDED_CSV,
 ) -> pl.DataFrame:
     """Export the S&P 500 Google Sheet from Drive to CSV and split into clean active & excluded CSVs."""
-    if not sheet_id:
+    effective_sheet_id = (sheet_id or os.getenv("SP500_UNIVERSE_SHEET_ID", "")).strip()
+    if not effective_sheet_id:
         raise ValueError(
             "No Google Sheet ID provided. Specify --sheet-id or set SP500_UNIVERSE_SHEET_ID in your environment."
         )
     base_cmd, env = get_gdrive_base_cmd()
     raw_csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = base_cmd + ["readonly", "export", sheet_id, str(raw_csv_path), "--format", "csv"]
+    cmd = base_cmd + ["readonly", "export", effective_sheet_id, str(raw_csv_path), "--format", "csv"]
     res = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
     if res.returncode != 0:
         err = (res.stderr or res.stdout).strip()
@@ -92,6 +95,7 @@ def load_universe_symbols(
     *,
     mode: UniverseFilter = "active",
     include_historical_tickers: bool = False,
+    sheet_id: str | None = None,
     excluded_csv_path: Path = DEFAULT_EXCLUDED_CSV,
 ) -> list[str]:
     """Load ticker symbols from the S&P 500 Universe CSV.
@@ -113,6 +117,7 @@ def load_universe_symbols(
             )
         else:
             export_universe_sheet_from_gdrive(
+                sheet_id=sheet_id,
                 clean_csv_path=csv_path,
                 excluded_csv_path=excluded_csv_path,
             )

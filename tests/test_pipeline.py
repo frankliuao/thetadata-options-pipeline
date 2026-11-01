@@ -375,6 +375,122 @@ class MockCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(download_main(["--mock-test", "--data-dir", tmp]), 0)
 
+    def test_normalize_respects_explicit_trade_date_over_timestamp(self) -> None:
+        df = pl.DataFrame({
+            "symbol": ["SPY"],
+            "expiration": [datetime.date(2024, 12, 20)],
+            "strike": [500.0],
+            "right": ["C"],
+            "timestamp": [datetime.datetime(2024, 1, 1, 23, 30, 0)],
+            "bid": [10.0],
+            "ask": [11.0],
+            "open_interest": [100],
+        })
+        normalized = normalize_options_df(df, trade_date=datetime.date(2024, 1, 2))
+        self.assertEqual(normalized["trade_date"][0], datetime.date(2024, 1, 2))
+        self.assertEqual(normalized["open_interest_prior_close"][0], 100)
+
+        # Re-normalizing after replacing dedicated OI should update open_interest_prior_close
+        deduped = normalized.drop(["open_interest", "open_interest_prior_close"]).with_columns(
+            pl.lit(500).alias("open_interest")
+        )
+        renormalized = normalize_options_df(deduped, trade_date=datetime.date(2024, 1, 2))
+        self.assertEqual(renormalized["open_interest"][0], 500)
+        self.assertEqual(renormalized["open_interest_prior_close"][0], 500)
+
+    def test_loader_unions_processed_with_newer_raw_sessions(self) -> None:
+        from options_data.loader import OptionsDataLoader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            sym = "SPY"
+            proc_dir = data_dir / "processed" / "options_eod" / f"symbol={sym}"
+            raw_dir = data_dir / "raw" / "options_eod" / f"symbol={sym}" / "year=2024"
+            proc_dir.mkdir(parents=True)
+            raw_dir.mkdir(parents=True)
+
+            # Year 2023 in processed
+            pl.DataFrame({
+                "trade_date": [datetime.date(2023, 12, 15)],
+                "symbol": [sym],
+                "expiration": [datetime.date(2024, 1, 19)],
+                "strike": [450.0],
+                "right": ["call"],
+            }).write_parquet(proc_dir / f"{sym}_2023.parquet")
+
+            # Year 2024 in raw (unconsolidated)
+            pl.DataFrame({
+                "trade_date": [datetime.date(2024, 1, 15)],
+                "symbol": [sym],
+                "expiration": [datetime.date(2024, 2, 16)],
+                "strike": [470.0],
+                "right": ["call"],
+            }).write_parquet(raw_dir / f"{sym}_2024-01-15.parquet")
+
+            loader = OptionsDataLoader(data_dir=data_dir)
+            lf = loader.scan_symbol(sym)
+            df = lf.collect()
+            self.assertEqual(df.height, 2)
+            self.assertEqual(sorted(df["trade_date"].to_list()), [datetime.date(2023, 12, 15), datetime.date(2024, 1, 15)])
+
+    def test_updater_heals_internal_gaps(self) -> None:
+        days = [
+            datetime.date(2024, 1, 2),
+            datetime.date(2024, 1, 3),
+            datetime.date(2024, 1, 4),
+        ]
+
+        class FakeDownloader:
+            def __init__(self, root: Path) -> None:
+                self.root = root
+                self.gdrive = None
+                self.seen: list[datetime.date] = []
+
+            def get_trading_days(self, start: datetime.date, end: datetime.date) -> list[datetime.date]:
+                return [day for day in days if start <= day <= end]
+
+            def download_day(self, symbol: str, trade_date: datetime.date) -> tuple[datetime.date, int, str]:
+                self.seen.append(trade_date)
+                out = (
+                    self.root
+                    / "raw"
+                    / "options_eod"
+                    / f"symbol={symbol}"
+                    / f"year={trade_date.year}"
+                    / f"{symbol}_{trade_date.isoformat()}.parquet"
+                )
+                out.parent.mkdir(parents=True, exist_ok=True)
+                pl.DataFrame({"trade_date": [trade_date]}).write_parquet(out)
+                return (trade_date, 1, "saved")
+
+            def consolidate_year(self, symbol: str, year: int) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Create files for day 0 and day 2, leaving day 1 as an internal gap
+            raw_dir = root / "raw" / "options_eod" / "symbol=SPY" / "year=2024"
+            raw_dir.mkdir(parents=True)
+            pl.DataFrame({"trade_date": [days[0]]}).write_parquet(raw_dir / f"SPY_{days[0].isoformat()}.parquet")
+            pl.DataFrame({"trade_date": [days[2]]}).write_parquet(raw_dir / f"SPY_{days[2].isoformat()}.parquet")
+
+            fake = FakeDownloader(root)
+            updater = IncrementalOptionsUpdater(
+                config=DownloadConfig(
+                    symbols=["SPY"],
+                    start_date=days[0],
+                    end_date=days[-1],
+                    sync_to_gdrive=False,
+                    data_dir=root,
+                    consolidate_yearly=False,
+                ),
+                downloader=fake,  # type: ignore[arg-type]
+            )
+            # Without forced_since, updater should detect the hole at day 1 and heal it
+            failed = updater.run_update(target_end_date=days[-1], forced_since=None)
+            self.assertEqual(failed, 0)
+            self.assertIn(days[1], fake.seen)
+
 
 if __name__ == "__main__":
     unittest.main()

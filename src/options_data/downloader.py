@@ -420,8 +420,9 @@ class ThetaOptionsDownloader:
                             oi_df.select(join_keys + ["open_interest"])
                             .unique(subset=join_keys, keep="last")
                         )
-                        if "open_interest" in df.columns:
-                            df = df.drop("open_interest")
+                        for col in ("open_interest", "open_interest_prior_close"):
+                            if col in df.columns:
+                                df = df.drop(col)
                         df = df.join(oi_subset, on=join_keys, how="left")
                         df = normalize_options_df(df, trade_date=trade_date)
             except NoDataFoundError:
@@ -603,6 +604,7 @@ class ThetaOptionsDownloader:
                         task_id = progress.add_task(
                             f"[green]{symbol} {year}[/green]", total=len(pending_days)
                         )
+                        failed_days_in_year: list[tuple[datetime.date, Exception]] = []
                         with concurrent.futures.ThreadPoolExecutor(
                             max_workers=cfg.max_workers
                         ) as pool:
@@ -620,8 +622,16 @@ class ThetaOptionsDownloader:
                                         empty_days += 1
                                 except Exception as exc:
                                     console.print(f"[red]✗ Error on {symbol} {d}: {exc}[/red]")
+                                    failed_days_in_year.append((d, exc))
                                 finally:
                                     progress.advance(task_id)
+
+                if failed_days_in_year:
+                    err_dates = [d.isoformat() for d, _ in failed_days_in_year]
+                    raise RuntimeError(
+                        f"Failed to download {len(failed_days_in_year)} session(s) for {symbol} in {year}: {err_dates}. "
+                        f"Consolidation aborted to prevent permanent data holes."
+                    )
 
                 console.print(
                     f"[green]✓ {symbol} {year}:[/green] "

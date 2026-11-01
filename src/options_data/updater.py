@@ -113,13 +113,34 @@ class IncrementalOptionsUpdater:
                 latest_d = find_latest_downloaded_date(cfg.data_dir, sym)
                 if latest_d is None:
                     symbol_info[sym] = (None, "No existing data")
-                elif latest_d >= end_date:
-                    symbol_info[sym] = (None, str(latest_d))
                 else:
                     st = latest_d + datetime.timedelta(days=1)
-                    symbol_info[sym] = (st, None)
-                    if st <= end_date:
-                        valid_starts.append(st)
+                    sym_raw_dir = cfg.data_dir / "raw" / "options_eod" / f"symbol={sym}"
+                    if sym_raw_dir.exists():
+                        raw_dates: set[datetime.date] = set()
+                        for f in sym_raw_dir.glob("year=*/*.parquet"):
+                            try:
+                                raw_dates.add(
+                                    datetime.date.fromisoformat(f.stem.replace(f"{sym}_", ""))
+                                )
+                            except ValueError:
+                                continue
+                        if raw_dates:
+                            min_raw = min(raw_dates)
+                            try:
+                                span_trading_days = self.downloader.get_trading_days(min_raw, latest_d)
+                                missing_holes = [d for d in span_trading_days if d not in raw_dates]
+                                if missing_holes:
+                                    st = min(missing_holes)
+                            except Exception as exc:
+                                logger.debug("Could not verify internal gaps for %s: %s", sym, exc)
+
+                    if latest_d >= end_date and st > end_date:
+                        symbol_info[sym] = (None, str(latest_d))
+                    else:
+                        symbol_info[sym] = (st, None)
+                        if st <= end_date:
+                            valid_starts.append(st)
 
         # 2. Fetch trading calendar starting from the earliest missing gap among all symbols
         if not valid_starts:
